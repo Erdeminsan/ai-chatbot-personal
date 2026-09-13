@@ -1,0 +1,9 @@
+atlassian-python-api==5.0.4
+Django>=5.2,<5.3
+requests>=2.32.4,<3
+beautifulsoup4>=4.13,<5
+markdownify>=1.2,<2
+python-dotenv>=1.1,<2
+pytesseract>=0.3.13,<0.4
+Pillow>=11,<13
+defusedxml>=0.7.1,<0.8

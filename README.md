@@ -4,7 +4,7 @@ Confluence Data Center 8.5.3 hedefli Django komut projesi. atlassian-python-api 
 
 ## Kurulum
 
-ZIP'i açıp `confluence_exporter` klasörüne geçin. Mevcut `.env` dosyanızı koruyun.
+ `confluence_exporter` klasörüne geçin. Mevcut `.env` dosyanızı koruyun.
 
 ```bash
 python -m venv venv

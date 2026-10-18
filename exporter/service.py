@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from .client import ExportError
 from .parser import convert
+from .confluence_media import ConfluenceMedia
 from .enrichment import EnrichmentOptions, enrich_attachment, enrichment_markdown
 
 def dump(path, data):
@@ -25,6 +26,8 @@ def export_page(client, page_id, output, *, options=None, resume=False):
     destination = Path(output).resolve() / page_id / version
     if destination.exists() and resume:
         previous = json.loads((destination / 'normalized.json').read_text(encoding='utf-8'))
+        if previous.get('schema_version') != 3:
+            raise ExportError('Mevcut çıktı eski şemada; görsel gruplaması için yeni --output kullanın.')
         if previous.get('source_base_url') != client.resolve('./'):
             raise ExportError('Mevcut çıktı başka bir Confluence adresine ait; farklı --output kullanın.')
         if previous.get('enrichment_options') != options.metadata():
@@ -66,26 +69,35 @@ def export_page(client, page_id, output, *, options=None, resume=False):
             except ExportError as exc:
                 record["error"] = str(exc)
                 issues.append(f"Ek indirilemedi: {title}: {exc}")
-            if record['path']:
-                record['enrichment'], enrichment_issues = enrich_attachment(stage / record['path'], title, options)
-                issues.extend(f"{title}: {message}" for message in enrichment_issues)
             records.append(record)
         storage = raw["body"]["storage"]["value"]
-        markdown, warnings, macros = convert(storage, assets)
+        def analyze(record, context):
+            return enrich_attachment(stage / record['path'], record['title'], options,
+                                     context=raw['title'] + '\n' + context)
+        media = ConfluenceMedia(records, analyze)
+        markdown, warnings, macros = convert(storage, assets, media=media)
         issues.extend(warnings)
-        markdown += enrichment_markdown(records)
+        # Attachments not referenced by an image remain available in the appendix.
+        unreferenced = [record for record in records if not record.get('media_group_ids')]
+        for record in unreferenced:
+            if record['path']:
+                record['enrichment'], enrichment_issues = analyze(record, '')
+                issues.extend(f"{record['title']}: {message}" for message in enrichment_issues)
+        markdown += enrichment_markdown(unreferenced)
         # Concurrent edits must not be silently paired with the earlier page body.
         latest = client.json(f"rest/api/content/{page_id}", params={"expand": "version"})
         if latest.get("version", {}).get("number") != raw["version"]["number"]:
             raise ExportError("Sayfa dışa aktarım sırasında değişti; tekrar deneyin.")
         source = client.resolve(raw.get("_links", {}).get("webui", f"pages/viewpage.action?pageId={page_id}"))
         normalized = {
-            "schema_version": 2, "source_base_url": client.resolve("./"), "enrichment_options": options.metadata(), "page_id": page_id, "title": raw["title"],
+            "schema_version": 3, "source_base_url": client.resolve("./"), "enrichment_options": options.metadata(), "page_id": page_id, "title": raw["title"],
             "space": raw.get("space", {}).get("key"), "version": int(version),
             "source_url": source, "ancestors": [{"id": x["id"], "title": x.get("title")} for x in raw.get("ancestors", [])],
             "exported_at": datetime.now(timezone.utc).isoformat(),
-            "storage": storage, "markdown": markdown, "attachments": records,
-            "macro_names": macros, "generated_content_requires_review": any(r.get("enrichment", {}).get("vision") for r in records), "warnings": issues,
+            "storage": storage, "markdown": markdown, "attachments": records, "media_groups": media.groups,
+            "macro_names": macros, "generated_content_requires_review": any(
+                r.get("enrichment", {}).get("vision")
+                for r in unreferenced + [a for group in media.groups for a in group['assets']]), "warnings": issues,
             "acl_status": "not_collected", "scope": "single_current_page_and_direct_attachments",
             "status": "needs_review" if issues else "converted",
         }

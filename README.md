@@ -1,6 +1,78 @@
-# Confluence Exporter — toplu tarama, OCR ve diyagram işleme
+# Confluence ve Web Exporter — Markdown, OCR ve diyagram işleme
 
 Confluence Data Center 8.5.3 hedefli Django komut projesi. atlassian-python-api 5.0.4 ile API istekleri, requests ortak oturumuyla ek indirme yapılır. Veri tabanı ve web arayüzü yoktur: `migrate` ve `runserver` gerekmez. Python 3.12/3.13 kullanın.
+
+Confluence erişimi olmadan da `export_web` komutuyla bir web sayfası dışa aktarılabilir. Web istemcisi ayrı HTTP oturumu kullanır; Confluence PAT'ını kullanmaz veya göndermez.
+
+## Web sayfasını Markdown'a aktarma
+
+Bağımlılıkları aşağıdaki kurulum bölümündeki gibi yükledikten sonra:
+
+```bash
+python manage.py export_web --url "https://ornek.com/dokuman" --output exports_web
+
+# Ana içeriği kendiniz seçmek isterseniz:
+python manage.py export_web --url "https://ornek.com/dokuman" --selector "#content" --output exports_web
+
+# Görsel içindeki metin + yerel görsel modelle diyagram açıklaması:
+python manage.py export_web --url "https://ornek.com/dokuman" --ocr --ocr-lang tur+eng --vision
+```
+
+Varsayılan olarak **girilen URL'deki tek sayfa** işlenir; site içindeki bağlantılar otomatik taranmaz. Ana içerik için önce `main`, sonra `article`, yoksa `body` seçilir. Navigasyon, footer, aside, form, script ve açıkça gizlenmiş öğeler çıkarılır. İhtiyaç halinde `--selector` ile farklı bir alan seçebilirsiniz. HTTP karakter kodlaması, göreli bağlantılar, HTML base adresi, yaygın lazy-loading görselleri ve srcset desteklenir. Başlıklar, paragraflar, listeler, tablolar ve kod blokları sayfa sırasıyla Markdown'a çevrilir.
+
+Her çalıştırma `exports_web/<sunucu>_<zaman>_<benzersiz-ek>/` altında yeni klasör oluşturur:
+
+| Dosya | İçerik |
+| --- | --- |
+| `page.md` | Sayfa metni, yerel görsel bağlantıları, ilişkili açıklamalar ve isteğe bağlı analiz |
+| `raw.html` | Sunucudan gelen orijinal HTML |
+| `normalized.json` | Kaynak URL, başlık, Markdown, görsel grupları, diyagram kaynakları, uyarılar |
+| `assets/` | İndirilen görseller ve SVG kaynakları |
+
+### Görsel ve açıklaması birlikte nasıl tutulur?
+
+Bir `figure` içindeki görseller ve `figcaption` aynı Markdown grubunda tutulur. `aria-describedby` ile bağlanan açıklamalar da gruba eklenir. Bu ilişkiler yoksa doğrudan komşu kısa açıklama/paragraf aranır. Komşu metin kesin bir görsel açıklaması kabul edilmez: `adjacent_text_heuristic` ve **Yakın bağlam (otomatik eşleştirme)** etiketiyle saklanır. Komşu metnin asıl sayfa konumu korunur; grupta bağlam olarak bir kopyası bulunur. Her sitedeki görsel/metin ilişkisini hatasız bulma garantisi yoktur.
+
+```markdown
+<!-- media-group:1 -->
+![Sipariş akışı](assets/....png)
+
+Şekil 1: Ödeme başarılıysa hazırlama aşamasına geçilir.
+
+**media-1-1 — OCR metni:**
+> Görselden çıkarılan yazılar
+
+**media-1-1 — Model yorumu — doğrulama gerekli:**
+> Modelin görsel yorumu
+<!-- /media-group:1 -->
+```
+
+JSON'daki `media_groups` her görselin dosyasını, açıklama ilişkisini ve OCR/model çıktısını bir arada taşır. Gelecekte RAG için parçalama yapılırken bu grup sınırları korunmalıdır; yalnızca sabit karakter sayısına göre bölmek ilişkiyi yeniden koparabilir. `--vision` kullanıldığında görselin alt metni/açıklaması ve grup metni de modele bağlam olarak gönderilir (en fazla 6000 karakter). Aynı görsel farklı açıklamalarla tekrar kullanılırsa dosya bir kez indirilir, her kullanım kendi bağlamıyla analiz edilir.
+
+### Diyagramlar ve sınırlar
+
+- HTML içindeki Mermaid/PlantUML/sequence/Graphviz kaynakları dil etiketli kod blokları olarak korunur. Bu, diyagramın kaynak aktarımıdır; modelle semantik akış çözümlemesi değildir.
+- Inline veya görsel olarak yüklenen SVG dosyaları saklanır; başlık, açıklama ve metin etiketleri çıkarılır. SVG'nin geometrisinden ok yönü çıkarılmaz; SVG rasterizasyonu ve SVG için vision bu sürümde yoktur.
+- PNG/JPEG gibi raster diyagramlar dosya olarak korunur. `--ocr` yazılarını çıkarır; `--vision` yerel Ollama modeliyle sequence/flow açıklaması üretir. **Model açıklaması doğrulama gerektirir.** Yalnızca OCR kullanmak okların anlamını çözmez.
+- OCR ve vision varsayılan olarak kapalıdır. Tesseract dil paketleri ve yerel Ollama modeli için aşağıdaki kurulum bölümlerini kullanın. Web aktarımı için Confluence ayarları gerekmez.
+- JavaScript çalıştırılmaz ve giriş yapılmaz. Yalnızca tarayıcıda sonradan oluşan diyagram/canvas, iframe, PDF/Office ve CSS arka plan görselleri işlenmez; görünür HTML/raster önizleme veya kaynak DSL gerekir. Gömülü öğeler uyarı bırakır. Giriş gerektiren sayfalar için oturum desteği henüz yoktur; başarılı HTTP yanıtı gerçek makale yerine giriş ekranı da olabilir.
+- Sayfa indirmesi 10 MiB, görsel indirmesi 20 MiB ile sınırlıdır. İndirilemeyen görseller metni kaybettirmez; kaynak URL ve uyarı kaydedilir. HTML isteği başarısızsa komut hata koduyla biter. Çıktı klasörü tamamlandıktan sonra görünür hale getirilir.
+
+### Confluence olmadan yerel örnek
+
+Bir terminalde:
+
+```bash
+python -m http.server 8000 --bind 127.0.0.1 --directory examples
+```
+
+İkinci terminalde:
+
+```bash
+python manage.py export_web --url "http://127.0.0.1:8000/web_demo.html"
+```
+
+Örnek; SVG flow diyagramı, ona bağlı açıklama, Mermaid sequence diagram, JSON kodu ve tablo içerir.
 
 ## Kurulum
 
@@ -137,10 +209,12 @@ Resume tekrar envanter çıkarır ve aynı kaynak/sayfa sürümü/analiz ayarlar
 
 ```bash
 python manage.py check
-python -m unittest exporter.tests exporter.test_bulk -v
+python -m unittest exporter.tests exporter.test_bulk exporter.test_web -v
 ```
 
 19 test: SDK/PAT yapılandırması ve HTTP yanıtları (taklit yanıtlarla), sayfalama, tüm space/ağaç dolaşımı, hata sonrası devam, resume, draw.io sıkıştırma/çoklu sayfa/XML güvenliği, gerçek Tesseract İngilizce OCR, taklit Ollama yanıtı ve dosyaya uçtan uca diyagram dışa aktarımı. OCR testi için Tesseract ve eng paketi gerekir.
+
+Ek web testleri: görsel/açıklama grupları, komşuluk ile açık ilişki ayrımı, lazy-load/srcset, göreli URL ve charset, kaynak diyagramlar, SVG, başarısız görsel, aynı görselin farklı bağlamları, modele açıklama aktarımı, boyut/yönlendirme sınırları ve PAT olmadan gerçek yerel HTTP üzerinden terminal komutunun çalışması. Gerçek bir Ollama modeli bu testlerde çağrılmaz.
 
 Şirket Confluence 8.5.3 bağlantısı ve gerçek Ollama modeli burada test edilmedi. Türkçe OCR dili kullanıcı ortamında kurulum sonrası doğrulanmalıdır.
 

@@ -1,227 +1,559 @@
-# Confluence ve Web Exporter — Markdown, OCR ve diyagram işleme
+# Web ve Confluence Exporter
 
-Confluence Data Center 8.5.3 hedefli Django komut projesi. atlassian-python-api 5.0.4 ile API istekleri, requests ortak oturumuyla ek indirme yapılır. Veri tabanı ve web arayüzü yoktur: `migrate` ve `runserver` gerekmez. Python 3.12/3.13 kullanın.
+Web sayfalarındaki veya Confluence Data Center içindeki bilgileri; metin, görsel, kod ve diyagram kaynaklarını koruyarak **Markdown ve JSON dosyalarına** aktaran Python/Django komut satırı projesi.
 
-Confluence erişimi olmadan da `export_web` komutuyla bir web sayfası dışa aktarılabilir. Web istemcisi ayrı HTTP oturumu kullanır; Confluence PAT'ını kullanmaz veya göndermez.
+**Kullanım sırası:** Önce Confluence erişimi olmadan web scraping ile sistemi çalıştırın. Çıktıları ve isteğe bağlı görsel analizini inceleyin. Confluence erişiminiz açıldığında aynı proje içinde bağlantı ayarlarını ekleyip Confluence komutlarına geçin.
 
-## Web sayfasını Markdown'a aktarma
+## İçindekiler
 
-Bağımlılıkları aşağıdaki kurulum bölümündeki gibi yükledikten sonra:
+1. [Web scraping ile ilk çalıştırma](#1-web-scraping-ile-ilk-çalıştırma)
+2. [Web içeriğinin dönüştürülmesi](#2-web-içeriğinin-dönüştürülmesi)
+3. [Web için OCR ve görsel model kurulumu](#3-web-için-ocr-ve-görsel-model-kurulumu)
+4. [Web çıktıları ve sorun giderme](#4-web-çıktıları-ve-sorun-giderme)
+5. [İki veri kaynağı ve ortak proje yapısı](#5-iki-veri-kaynağı-ve-ortak-proje-yapısı)
+6. [Web denemesinden Confluence kullanımına geçiş](#6-web-denemesinden-confluence-kullanımına-geçiş)
+7. [Confluence çıktıları ve çalışma sınırları](#7-confluence-çıktıları-ve-çalışma-sınırları)
+8. [Dosyaların görevleri](#8-dosyaların-görevleri)
+9. [Testler ve sonraki RAG aşaması](#9-testler-ve-sonraki-rag-aşaması)
+
+## 1. Web scraping ile ilk çalıştırma
+
+### 1.1. Şu anda neyi çalıştırıyoruz?
+
+Komut satırına bir URL veriyoruz. Proje bu URL'nin döndürdüğü HTML'i indiriyor, ana içeriği seçiyor, metinleri ve görselleri işliyor; sonucu bilgisayarımızda dosyalara kaydediyor.
+
+Bu adımda Confluence'a bağlanılmaz. **Confluence hesabı, PAT veya şirket VPN'i gerekmez.** Hedef sayfaya bilgisayarınızdan erişebilmeniz yeterlidir; sitenin kendi erişim kısıtlamaları ayrıca geçerlidir.
+
+Varsayılan kapsam **tek URL'deki tek sayfadır**. Ana sayfayı vermek sitenin bütün bağlantılarının ve alt sayfalarının taranacağı anlamına gelmez.
+
+Proje Django'nun komut altyapısını kullanır. Şu an veritabanı, web ekranı veya sohbet arayüzü yoktur. Çalıştırmak için `migrate` veya `runserver` gerekmez.
+
+### 1.2. Kurulum
+
+Python 3.12 veya 3.13 kullanın. Projeyi ilk kez indiriyorsanız:
+
+```bash
+git clone https://github.com/Erdeminsan/ai-chatbot-personal.git
+cd ai-chatbot-personal
+```
+
+Proje zaten bilgisayarınızdaysa yeniden klonlamayın. Güncel kodu aldıktan sonra `manage.py` dosyasının bulunduğu klasöre geçin. Aşağıdaki bütün proje komutları bu klasörde çalıştırılır.
+
+macOS/Linux:
+
+```bash
+python3 -m venv venv
+source venv/bin/activate
+python -m pip install -r requirements.txt
+python manage.py check
+```
+
+Windows PowerShell:
+
+```powershell
+py -m venv venv
+.\venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+python manage.py check
+```
+
+Sonraki terminal oturumlarında sanal ortamı yeniden etkinleştirin; her seferinde oluşturmayın. `requirements.txt`, iki kaynağın Python bağımlılıklarını da kurar. Confluence paketinin kurulu olması Confluence'a bağlantı yapıldığı anlamına gelmez.
+
+### 1.3. İlk web komutu
 
 ```bash
 python manage.py export_web --url "https://ornek.com/dokuman" --output exports_web
-
-# Ana içeriği kendiniz seçmek isterseniz:
-python manage.py export_web --url "https://ornek.com/dokuman" --selector "#content" --output exports_web
-
-# Görsel içindeki metin + yerel görsel modelle diyagram açıklaması:
-python manage.py export_web --url "https://ornek.com/dokuman" --ocr --ocr-lang tur+eng --vision
 ```
 
-Varsayılan olarak **girilen URL'deki tek sayfa** işlenir; site içindeki bağlantılar otomatik taranmaz. Ana içerik için önce `main`, sonra `article`, yoksa `body` seçilir. Navigasyon, footer, aside, form, script ve açıkça gizlenmiş öğeler çıkarılır. İhtiyaç halinde `--selector` ile farklı bir alan seçebilirsiniz. HTTP karakter kodlaması, göreli bağlantılar, HTML base adresi, yaygın lazy-loading görselleri ve srcset desteklenir. Başlıklar, paragraflar, listeler, tablolar ve kod blokları sayfa sırasıyla Markdown'a çevrilir.
+Örnek URL yerine okumak istediğiniz gerçek HTML sayfasının adresini yazın. Özellikle `?` ve `&` içeren adreslerde URL'yi tırnak içinde tutun.
 
-Her çalıştırma `exports_web/<sunucu>_<zaman>_<benzersiz-ek>/` altında yeni klasör oluşturur:
+Bu komut için `.env` oluşturmak gerekmez. **OCR ve vision varsayılan olarak kapalıdır.** Metinler, tablolar, kodlar ve görsel dosyaları yine aktarılır; görselin içindeki yazılar okunmaz veya anlamına dair model yorumu üretilmez.
 
-| Dosya | İçerik |
-| --- | --- |
-| `page.md` | Sayfa metni, yerel görsel bağlantıları, ilişkili açıklamalar ve isteğe bağlı analiz |
-| `raw.html` | Sunucudan gelen orijinal HTML |
-| `normalized.json` | Kaynak URL, başlık, Markdown, görsel grupları, diyagram kaynakları, uyarılar |
-| `assets/` | İndirilen görseller ve SVG kaynakları |
+Terminalde oluşturulan `page.md` dosyasının tam yolu yazdırılır. Bu dosyayı bir editörde açın. Görsellerin görünmesi için Markdown dosyasıyla aynı çıktı klasöründeki `assets/` dizinini birlikte tutun.
 
-### Görsel ve açıklaması birlikte nasıl tutulur?
+### 1.4. Dış site gerektirmeyen hazır örnek
 
-Bir `figure` içindeki görseller ve `figcaption` aynı Markdown grubunda tutulur. `aria-describedby` ile bağlanan açıklamalar da gruba eklenir. Bu ilişkiler yoksa doğrudan komşu kısa açıklama/paragraf aranır. Komşu metin kesin bir görsel açıklaması kabul edilmez: `adjacent_text_heuristic` ve **Yakın bağlam (otomatik eşleştirme)** etiketiyle saklanır. Komşu metnin asıl sayfa konumu korunur; grupta bağlam olarak bir kopyası bulunur. Her sitedeki görsel/metin ilişkisini hatasız bulma garantisi yoktur.
+`examples/web_demo.html`; metin, açıklamalı SVG flow diyagramı, Mermaid sequence diagram, JSON kod bloğu ve tablo içerir.
 
-```markdown
-<!-- media-group:1 -->
-![Sipariş akışı](assets/....png)
-
-Şekil 1: Ödeme başarılıysa hazırlama aşamasına geçilir.
-
-**media-1-1 — OCR metni:**
-> Görselden çıkarılan yazılar
-
-**media-1-1 — Model yorumu — doğrulama gerekli:**
-> Modelin görsel yorumu
-<!-- /media-group:1 -->
-```
-
-JSON'daki `media_groups` her görselin dosyasını, açıklama ilişkisini ve OCR/model çıktısını bir arada taşır. Gelecekte RAG için parçalama yapılırken bu grup sınırları korunmalıdır; yalnızca sabit karakter sayısına göre bölmek ilişkiyi yeniden koparabilir. `--vision` kullanıldığında görselin alt metni/açıklaması ve grup metni de modele bağlam olarak gönderilir (en fazla 6000 karakter). Aynı görsel farklı açıklamalarla tekrar kullanılırsa dosya bir kez indirilir, her kullanım kendi bağlamıyla analiz edilir.
-
-### Diyagramlar ve sınırlar
-
-- HTML içindeki Mermaid/PlantUML/sequence/Graphviz kaynakları dil etiketli kod blokları olarak korunur. Bu, diyagramın kaynak aktarımıdır; modelle semantik akış çözümlemesi değildir.
-- Inline veya görsel olarak yüklenen SVG dosyaları saklanır; başlık, açıklama ve metin etiketleri çıkarılır. SVG'nin geometrisinden ok yönü çıkarılmaz; SVG rasterizasyonu ve SVG için vision bu sürümde yoktur.
-- PNG/JPEG gibi raster diyagramlar dosya olarak korunur. `--ocr` yazılarını çıkarır; `--vision` yerel Ollama modeliyle sequence/flow açıklaması üretir. **Model açıklaması doğrulama gerektirir.** Yalnızca OCR kullanmak okların anlamını çözmez.
-- OCR ve vision varsayılan olarak kapalıdır. Tesseract dil paketleri ve yerel Ollama modeli için aşağıdaki kurulum bölümlerini kullanın. Web aktarımı için Confluence ayarları gerekmez.
-- JavaScript çalıştırılmaz ve giriş yapılmaz. Yalnızca tarayıcıda sonradan oluşan diyagram/canvas, iframe, PDF/Office ve CSS arka plan görselleri işlenmez; görünür HTML/raster önizleme veya kaynak DSL gerekir. Gömülü öğeler uyarı bırakır. Giriş gerektiren sayfalar için oturum desteği henüz yoktur; başarılı HTTP yanıtı gerçek makale yerine giriş ekranı da olabilir.
-- Sayfa indirmesi 10 MiB, görsel indirmesi 20 MiB ile sınırlıdır. İndirilemeyen görseller metni kaybettirmez; kaynak URL ve uyarı kaydedilir. HTML isteği başarısızsa komut hata koduyla biter. Çıktı klasörü tamamlandıktan sonra görünür hale getirilir.
-
-### Confluence olmadan yerel örnek
-
-Bir terminalde:
+Birinci terminalde proje klasöründen örnek sayfayı yayınlayın:
 
 ```bash
 python -m http.server 8000 --bind 127.0.0.1 --directory examples
 ```
 
-İkinci terminalde:
+Bu terminal açık kalsın. İkinci terminalde aynı proje klasörüne geçip sanal ortamı etkinleştirin ve:
 
 ```bash
-python manage.py export_web --url "http://127.0.0.1:8000/web_demo.html"
+python manage.py export_web --url "http://127.0.0.1:8000/web_demo.html" --output exports_demo
 ```
 
-Örnek; SVG flow diyagramı, ona bağlı açıklama, Mermaid sequence diagram, JSON kodu ve tablo içerir.
+Örnek sunucuyu birinci terminalde `Ctrl+C` ile durdurabilirsiniz. Bu sunucu yalnızca HTML örneğini sunar; Django `runserver` değildir. Örnekteki görsel SVG olduğu için SVG aktarımı ve kaynak kod korunması denenir. Raster görsel OCR/vision denemesi için PNG/JPEG içeren bir sayfa kullanın.
 
-## Kurulum
+### 1.5. Web komutunun seçenekleri
 
- `confluence_exporter` klasörüne geçin. Mevcut `.env` dosyanızı koruyun.
+| Seçenek | Varsayılan | Görevi |
+| --- | --- | --- |
+| `--url` | Zorunlu | Okunacak HTTP/HTTPS HTML sayfası |
+| `--output` | `exports_web` | Çıktı klasörlerinin oluşturulacağı ana dizin |
+| `--selector` | Otomatik | Ana içerik için CSS ifadesi; örneğin `#content` |
+| `--ocr` | Kapalı | Raster görsellerdeki yazıları Tesseract ile çıkarır |
+| `--ocr-lang` | `tur+eng` | `--ocr` için dil seçimi |
+| `--vision` | Kapalı | Raster görselleri yerel Ollama modeliyle yorumlar |
+
+Yardım: `python manage.py export_web --help`.
+
+## 2. Web içeriğinin dönüştürülmesi
+
+### 2.1. Ana içeriği seçme
+
+`--selector` yoksa HTML'de önce `main`, yoksa `article`, sonra `body` seçilir; bunlar da yoksa tüm belge kullanılır. Navigasyon, footer, aside, form, script/style, template, noscript ve açıkça gizlenmiş öğeler çıkarılır. Her sitenin HTML yapısı farklı olduğundan otomatik seçim fazla veya eksik içerik alabilir.
+
+Hedef alanı kendiniz belirlemek için:
 
 ```bash
-python -m venv venv
-source venv/bin/activate
-python -m pip install -r requirements.txt
-cp .env.example .env
+python manage.py export_web --url "https://ornek.com/dokuman" --selector "#content"
+python manage.py export_web --url "https://ornek.com/dokuman" --selector "article"
 ```
 
-Son satır yalnızca ilk kurulum içindir; mevcut .env dosyanızın üzerine yazmayın.
-Windows PowerShell'de etkinleştirme: `venv\Scripts\Activate.ps1`; dosya kopyalama: `Copy-Item .env.example .env`.
+CSS seçicisi hangi HTML alanının okunacağını belirtir: `<div id="content">` için `#content`, `<div class="article-body">` için `.article-body` kullanılır. Geçersiz seçici veya eşleşmeyen alan komutu hatayla sonlandırır.
 
-.env içinde:
+### 2.2. İçerik türleri
 
-```dotenv
-CONFLUENCE_BASE_URL=https://confluence.sirketiniz.com/confluence
-CONFLUENCE_PAT=KENDI_PAT_DEGERINIZ
-CONFLUENCE_CA_BUNDLE=
-TESSERACT_CMD=
-OLLAMA_BASE_URL=http://127.0.0.1:11434
-OLLAMA_MODEL=
+| Sayfadaki içerik | Çıktıda ne olur? |
+| --- | --- |
+| Başlık, paragraf, liste | Sayfa sırası korunarak Markdown'a çevrilir |
+| Tablo | Markdown tabloya çevrilir; karmaşık yerleşimin birebir korunması garanti edilmez |
+| Kod bloğu | Dil bilgisi varsa korunarak Markdown kod bloğu oluşturulur |
+| Bağlantı | Göreli web adresleri sayfanın/base etiketinin adresine göre çözülür |
+| PNG/JPEG/WebP/BMP/TIFF/GIF | İndirilip yerel `assets/` bağlantısıyla Markdown'a eklenir |
+| Inline SVG veya SVG görsel | Kaynağı saklanır; başlık, açıklama ve metin etiketleri çıkarılır |
+| Yaygın lazy-load, srcset, gömülü data URL | Desteklenen HTML biçimlerinde görsel kaynağı çözülür |
+
+Sayfanın ekran görüntüsü alınmaz. HTML'deki bilgi ve desteklenen görsel kaynakları okunur; CSS arka plan görselleri bu kapsamda değildir.
+
+### 2.3. Görsel ve açıklaması nasıl birlikte tutulur?
+
+Teknik bir görsel açıklamasından koparıldığında anlamı kaybolabilir. Web aktarımı bu nedenle **görsel grupları** oluşturur. İlişki şu sırayla aranır:
+
+1. Bir `figure` içindeki görseller ve `figcaption` aynı gruba alınır. Bir açıklama birden fazla görseli anlatıyorsa görseller birlikte tutulur.
+2. Görseldeki `aria-describedby` açıklama öğesini işaret ediyorsa bu metin gruba eklenir.
+3. Açık ilişki yoksa doğrudan komşu kısa açıklama/paragraf aranır. Paragraf eşleşmesi tahminidir: `adjacent_text_heuristic` ve **Yakın bağlam (otomatik eşleştirme)** etiketiyle saklanır. Açıklama sınıfı gibi açık bir komşu öğe `adjacent_caption` olarak kaydedilebilir.
+
+Komşu metnin asıl sayfa konumu korunur; grupta bağlam için bir kopyası bulunabilir. Bu nedenle aynı paragrafın iki yerde görünmesi bazen beklenen davranıştır. Uzak metinler ve sitenin özel yerleşimleri her zaman doğru eşleştirilemez.
+
+Bir grubun basitleştirilmiş görünümü:
+
+```markdown
+<!-- media-group:1 -->
+![Sipariş akışı](assets/ornek.png)
+
+Şekil 1: Ödeme başarılıysa hazırlama aşamasına geçilir.
+
+**media-1-1 — OCR metni:**
+> Görseldeki yazılar
+
+**media-1-1 — Model yorumu — doğrulama gerekli:**
+> Modelin ürettiği açıklama
+<!-- /media-group:1 -->
 ```
 
-Ana adreste kurumunuz /confluence kullanmıyorsa bu kısmı kaldırın. Sayfa URL'si veya /rest/api eklemeyin. Özel CA varsa CONFLUENCE_CA_BUNDLE değerine PEM dosyası yolunu yazın. TLS doğrulaması açık kalır. Confluence'a erişebilen şirket ağı/VPN gerekir. PAT çıktılara eklenmez.
+OCR/model bölümleri yalnızca ilgili seçenek kullanılıp sonuç üretildiğinde bulunur. Aynı grup JSON'daki `media_groups` içinde de saklanır: açıklama ilişkisinin yöntemi, görsel dosyaları ve analizler bir aradadır.
 
-```bash
-python manage.py check_confluence
-```
+`--vision` açıkken alt metin, ilişkili açıklama ve grup metni de görselle birlikte modele gönderilir; metin bağlamı en fazla 6000 karakterdir. Modelden bağlamın iddiasıyla görselde doğrudan gördüklerini ayırması istenir. Aynı görsel farklı açıklamalarla tekrar kullanılırsa dosya bir kez indirilir, her kullanım kendi bağlamıyla analiz edilir.
 
-## Tek sayfa, space ve tüm sayfa ağacı
+### 2.4. Sequence diagram ve flow diyagramları
 
-```bash
-# Tek sayfa, doğrudan ekleri ve varsa draw.io kaynak analizi
-python manage.py export_page --page-id 123456
+İşleme biçimini diyagramın sayfada nasıl sunulduğu belirler:
 
-# Bir space içindeki bütün güncel sayfalar; her derinlikteki alt sayfalar dahil
-python manage.py export_confluence --space-key ENG --output exports_eng
+| Biçim | Yapılan işlem | Akış yorumlanıyor mu? |
+| --- | --- | --- |
+| Tanınan Mermaid/PlantUML/sequence/Graphviz/DOT kaynak bloğu | Dil etiketli Markdown kod bloğunda ve JSON `diagrams` alanında korunur | Kaynak korunur; tam semantik çözümleme veya render yapılmaz |
+| PNG/JPEG gibi raster diyagram | İndirilip varsa açıklamasıyla gruplanır | `--vision` ile model yorumu üretilebilir |
+| Raster görsel içindeki yazılar | `--ocr` ile metin, kelime kutuları ve güven puanları çıkarılır | OCR tek başına okları veya mesaj sırasını yorumlamaz |
+| SVG diyagram | SVG kaynağı ve metin etiketleri korunur | Geometriden ok yönü çıkarılmaz; SVG için rasterizasyon/vision yoktur |
+| Canvas, iframe veya yalnızca JavaScript ile oluşan diyagram | Tam içeriği işlenmez; gömülü öğeler uyarı bırakabilir | Hayır |
 
-# Seçili sayfa ve tüm alt sayfaları (torunlar dahil)
-python manage.py export_confluence --root-page-id 123456 --output exports_tree
+Markdown'da görsel bağlantısının bulunması diyagramın anlamının çözüldüğü anlamına gelmez. Kaynak metin, OCR çıktısı ve model yorumu farklı bilgi türleridir.
 
-# Hesabın görebildiği bütün güncel space'ler ve içlerindeki güncel sayfalar
-python manage.py export_confluence --all-spaces --output exports_all
+## 3. Web için OCR ve görsel model kurulumu
 
-# Arşivlenmiş space'leri de space keşfine dahil et
-python manage.py export_confluence --all-spaces --include-archived-spaces --output exports_with_archived
-```
+### 3.1. Hangi araca ne zaman ihtiyacım var?
 
-`--all-spaces`, `--space-key`, `--root-page-id` seçeneklerinden yalnızca birini seçin. Space listelemesi ve içerik/ek/çocuk listelemelerinde `_links.next` takip edilir. Space içerik listesi yalnızca ana sayfaları değil bütün derinlikleri kapsar; ağaç seçeneği ise çocuk endpoint'ini kuyrukla dolaşır. Aynı kimlik tek koşuda yalnızca bir kez işlenir. Döngü, eksik izin ve listeleme hataları raporlanır. API hesabının göremediği içerikler keşfedilemez.
+| İhtiyaç | Gereken | Seçenek |
+| --- | --- | --- |
+| HTML metni ve görsel dosyaları | Python bağımlılıkları | Ek seçenek yok |
+| Görsel içindeki yazılar | Tesseract motoru ve dil paketleri | `--ocr` |
+| Raster görsel/sequence/flow açıklaması | Çalışan yerel Ollama ve görsel girdisi destekleyen model | `--vision` |
+| İki analiz birlikte | Tesseract ve Ollama | `--ocr --vision` |
 
-Toplu komutta --output verilmezse exports_batch altında zamana göre yeni bir klasör oluşturulur. Sayfalar sıralı işlenir; paralel istek yapılmaz. Bir sayfa başarısız olduğunda diğer sayfalara devam edilir. Ctrl+C durumunda biten sayfalar ve rapor saklanır.
+`pip install -r requirements.txt`, Tesseract motorunu, Ollama sunucusunu veya model dosyalarını kurmaz. Bunlar ayrı kurulur. OCR ve vision bağımsızdır; biri diğerini zorunlu kılmaz.
 
-## OCR: görsel içindeki Türkçe/İngilizce yazıyı çıkarma
+### 3.2. Tesseract OCR
 
-Mac'te Homebrew ile:
+macOS/Homebrew:
 
 ```bash
 brew install tesseract tesseract-lang
 tesseract --list-langs
 ```
 
-Linux/Debian:
+Debian/Ubuntu:
 
 ```bash
 sudo apt install tesseract-ocr tesseract-ocr-tur tesseract-ocr-eng
+tesseract --list-langs
 ```
 
-Dil listesinde `tur` ve `eng` bulunmalı. Yalnızca İngilizce dil paketi varsa `--ocr-lang eng` kullanın. Motor PATH üzerinde değilse TESSERACT_CMD ortam değişkenine tam yolunu girin.
+Diğer Linux dağıtımlarında uygun motor/dil paketlerini kendi paket yöneticinizle kurun; `apt` komutu Red Hat için kullanılmaz. Windows'ta Tesseract ve gerekli dil dosyalarını ayrıca kurun.
+
+`tur+eng` için dil listesinde ikisi de bulunmalıdır. Yalnızca İngilizce kuruluysa `--ocr-lang eng` kullanın:
 
 ```bash
-python manage.py export_page --page-id 123456 --ocr --output exports_ocr
-python manage.py export_confluence --all-spaces --ocr --ocr-lang tur+eng --output exports_all_ocr
+python manage.py export_web --url "https://ornek.com/dokuman" --ocr --ocr-lang eng
+python manage.py export_web --url "https://ornek.com/dokuman" --ocr --ocr-lang tur+eng
 ```
 
-OCR yerelde Tesseract ile çalışır. PNG/JPEG/WebP/BMP/TIFF/GIF ekleri desteklenir. Çıktıda metin, kelime kutuları ve motorun güven puanları bulunur. Güven puanı doğruluk garantisi değildir. OCR metni kaynak sayfa metninden ayrı tutulur. Çok kareli görüntülerde yalnızca ilk kare işlenir ve uyarı yazılır. PDF/Office eklerinin içindeki görseller ve SVG rasterizasyonu bu sürümün kapsamı dışındadır. OCR resimdeki okları yorumlamaz.
+Motor PATH üzerinde değilse proje kökünde `.env` oluşturup tam yolunu yazın:
 
-## Diyagram işleme
+```dotenv
+TESSERACT_CMD=/tam/yol/tesseract
+```
 
-**draw.io kaynakları otomatik işlenir.** `.drawio` uzantısı veya içeriğinde `<mxfile>` / `<mxGraphModel>` bulunan ekler tanınır. Sıkıştırılmış ve sıkıştırılmamış XML, birden fazla diyagram sayfası, normal hücreler ve object/UserObject düğümleri desteklenir. Düğüm kimlikleri/etiketleri, bağlantı uçları, bağlantı etiketleri ve belirtilmiş ok stilleri JSON'a yazılır. İnsan tarafından okunabilir yapı Markdown'a eklenir. Belirtilmemiş ok stili için akış yönü uydurulmaz.
+OCR yerelde çalışır. Desteklenen görsellerde 25 megapiksel sınırı uygulanır. Çok kareli görsellerin yalnızca ilk karesi işlenir ve uyarı yazılır. PDF/Office içindeki görseller ve SVG rasterizasyonu desteklenmez. Güven puanı, metnin doğru okunduğunun garantisi değildir.
 
-PlantUML/Mermaid makrolarında plain-text-body bulunuyorsa kaynak DSL kod bloğu olarak korunur. Bu DSL'ler render edilmez veya tam semantik analize tabi tutulmaz. Diğer makrolar uyarı bırakır ve orijinal storage JSON içinde korunur. draw.io makrosu ile kaynak eki otomatik birebir eşlenmediği için başarılı kaynak analizi yanında makro uyarısı görülebilir.
+### 3.3. Yerel Ollama vision
 
-**Sadece görsel olan diyagramların açıklaması için yerel Ollama görsel modeli:**
+1. Ollama'yı kurup yerel sunucuyu çalıştırın.
+2. Bilgisayarınızın kaynaklarına uygun, **görsel girdisi destekleyen** bir model indirin.
+3. `ollama list` ile kurulu modelin tam adını kontrol edin.
+4. Bu adı proje kökündeki `.env` dosyasına yazın.
 
-1. Ollama kurun ve çalıştırın.
-2. Bilgisayarınızda çalışabilen, görsel girdisi destekleyen bir model indirin.
-3. `ollama list` çıktısındaki model adını `.env` içindeki `OLLAMA_MODEL` alanına yazın.
-4. `--vision` seçeneğiyle çalıştırın:
+Komutların biçimi:
 
 ```bash
-python manage.py export_page --page-id 123456 --ocr --vision --output exports_vision
-python manage.py export_confluence --space-key ENG --ocr --vision --output exports_eng_vision
+ollama pull MODEL_ADI
+ollama list
 ```
 
-Vision yalnızca --vision verilirse çağrılır. Bu sürüm yalnızca localhost/127.0.0.1/::1 Ollama adreslerine bağlanır. Confluence PAT'ı Ollama'ya gönderilmez; ayrı oturum kullanılır. Model bilgisayarınızda kurulu ve çalışır olmalıdır; proje model indirmez. Görseller en fazla 2048 piksel boyutuna küçültülerek modele gönderilir. Bu nedenle küçük yazılar kaybolabilir.
+`MODEL_ADI` bir yer tutucudur; gerçek bir görsel model adıyla değiştirin. Proje sizin yerinize model seçmez/indirmez. Yalnızca metin kabul eden model vision için yeterli değildir.
 
-Model bütün desteklenen raster ekleri inceler; yalnızca dosya adından diyagram tahmini yapılmaz. Diyagram değilse kısa görsel açıklaması üretmesi istenir. Üretilen metin `generated=true`, `requires_review=true` ile saklanır. Model açıklaması kaynak gerçek olarak kabul edilmez. Model hatasında sayfa korunur, eksik analiz uyarıya yazılır. Gliffy veya eklentiye özel depodaki diyagram için erişilebilir raster önizleme eki yoksa bu sürüm onu yorumlayamaz; eklentiye özel adaptör gerekir.
+`.env`:
 
-## Çıktılar ve hata takibi
+```dotenv
+OLLAMA_BASE_URL=http://127.0.0.1:11434
+OLLAMA_MODEL=KURULU_GORSEL_MODELIN_TAM_ADI
+```
 
-Her sayfa `<output>/<page-id>/<version>/` altında:
+Model alanını gerçek kurulu model adıyla değiştirin. Kök adrese `/api/chat` eklemeyin; kod ekler. Sunucu zaten çalışıyorsa tekrar başlatmayın; gerektiğinde ayrı terminalde `ollama serve` kullanılır.
+
+```bash
+python manage.py export_web --url "https://ornek.com/dokuman" --vision
+python manage.py export_web --url "https://ornek.com/dokuman" --ocr --ocr-lang tur+eng --vision
+```
+
+Yalnızca `localhost`, `127.0.0.1` ve `::1` üzerindeki Ollama adresleri kabul edilir. İstek ayrı HTTP oturumuyla gider; Confluence PAT'ı taşınmaz. Görseller 2048 × 2048 sınırına sığacak şekilde küçültülür; küçük yazılar kaybolabilir. Desteklenen raster görseller dosya adından diyagram tahmini yapılmadan incelenir.
+
+Üretilen açıklama `generated=true`, `requires_review=true` ile işaretlenir. Model çıktısı kaynak sayfanın kesin bilgisi kabul edilmez. Çağrı başarısız olursa içerik korunur ve uyarı bırakılır.
+
+### 3.4. `.env` dosyasını koruma
+
+Örnek ayarları almak için **yalnızca `.env` henüz yoksa**:
+
+```bash
+cp .env.example .env
+```
+
+PowerShell: `Copy-Item .env.example .env`. Mevcut dosyanın üzerine kopyalamayın; gereken alanları düzenleyin. Web/OCR/vision için `CONFLUENCE_PAT` boş kalabilir. `.env`, sanal ortam ve `exports*` dizinleri `.gitignore` kapsamındadır.
+
+## 4. Web çıktıları ve sorun giderme
+
+### 4.1. Çıktı dosyaları
+
+Her koşu `--output` dizininde yeni bir `<sunucu>_<zaman>_<benzersiz-ek>/` klasörü oluşturur. Örneğin: `exports_web/ornek_com_20261018T200000000000Z_a1b2c3/page.md`. Önceki koşunun üzerine yazılmaz.
+
+| Dosya/JSON alanı | İçerik |
+| --- | --- |
+| `page.md` | Başlık, kaynak satırı ve dönüştürülen içerik |
+| `raw.html` | Sunucunun döndürdüğü orijinal HTML |
+| `normalized.json` | Kaynak metadata'sı, Markdown, görsel grupları ve analizler |
+| `assets/` | İndirilen görseller ve SVG kaynakları |
+| `requested_url` / `source_url` | Girilen adres / yönlendirme sonrası sayfa adresi |
+| `markdown` | Dönüştürülen gövde; `page.md` ayrıca başlık ve kaynak ekler |
+| `media_groups` | Görseller, açıklama ilişkileri, OCR ve vision sonuçları |
+| `diagrams` | Tanınan diyagram kaynak blokları |
+| `warnings` / `status` | Uyarılar ve `converted` / `needs_review` durumu |
+| `generated_content_requires_review` | Başarılı bir vision yorumu bulunup bulunmadığı |
+
+`converted`, model doğruluğunu onaylayan kalite damgası değildir. Başarılı model yorumu inceleme gerektirdiği halde işlem uyarısı oluşmamış olabilir; model inceleme alanını ayrıca kontrol edin.
+
+### 4.2. Hata ile uyarı farkı
+
+HTML indirilemiyorsa, URL HTML yerine PDF gibi başka içerik döndürüyorsa veya seçici geçersizse komut hatayla biter. Görsel indirilememesi/analiz hatası durumunda kalan içerik korunur; uyarılar JSON'a yazılır. Bu uyarılar komutu mutlaka sıfırdan farklı çıkış koduyla sonlandırmaz.
+
+SVG akışının yorumlanmaması veya vision kapalıyken raster görselin yalnızca korunması gibi kapsam bilgileri de uyarı oluşturabilir. Uyarı görmek bütün aktarımın bozuk olduğunu göstermez.
+
+| Durum | Kontrol |
+| --- | --- |
+| `manage.py` bulunamıyor | Proje kökünde olun |
+| Python paketi bulunamıyor | Sanal ortamı etkinleştirip aynı Python ile bağımlılıkları kurun |
+| Menü geldi/makale eksik | `--selector` ile doğru alanı seçin |
+| Tarayıcıdaki içerik yok | JavaScript, iframe/canvas veya oturum gerekebilir; tarayıcı çalıştırılmaz |
+| Giriş ekranı dışa aktarıldı | Web oturumu desteği yok; HTTP 200 gerçek makale alındığını garanti etmez |
+| Görsel yazısı çıkmadı | `--ocr`, motor ve dil paketlerini kontrol edin |
+| Diyagram açıklanmadı | `--vision`, Ollama ve görsel model gerekir; SVG için vision yok |
+| Yanlış açıklama eşleşti | JSON'daki yöntem alanını inceleyin; komşu paragraf ilişkisi tahminidir |
+| Model hatası | Ollama sunucusu, model adı ve görsel girdi desteği |
+| Büyük dosyada aktarım durdu | Web HTML indirmesi 10 MiB, görsel indirmesi 20 MiB ile sınırlı |
+
+Web komutunda `--resume` yoktur; tekrar çalıştırmak yeni çıktı üretir. Site genelini tarama, giriş yapma, PDF/Office işleme ve CSS arka plan görsellerini toplama henüz yoktur.
+
+## 5. İki veri kaynağı ve ortak proje yapısı
+
+**Web scraping ve Confluence aynı Python projesindedir.** İki ayrı veri toplama yolu bulunur. İkisini aynı anda çalıştırmak zorunda değilsiniz. Hangi komutu çalıştırırsanız o kaynağa bağlanılır; genel bir “mod değiştir” ayarı yoktur.
+
+| Konu | Web scraping | Confluence |
+| --- | --- | --- |
+| Komut | `export_web --url ...` | `export_page --page-id ...` veya `export_confluence ...` |
+| Kaynak | URL'nin döndürdüğü HTML | Confluence REST API |
+| Kimlik doğrulama | Yerleşik giriş/oturum yok | PAT |
+| Kullanıcı girdisi | URL, isteğe bağlı CSS seçicisi | Sayfa ID'si, space key veya tüm space seçimi |
+| Kapsam | Tek sayfa | Tek sayfa, ağaç, bir space veya görünür tüm space'ler |
+| Dönüştürücü | `web.py` | `parser.py` ve `service.py` |
+| Analiz motoru | Ortak `enrichment.py` | Ortak `enrichment.py` |
+| Ham kaynak | `raw.html` | `raw.json`, `attachments.raw.json` |
+| JSON | Web şeması v1: `media_groups`, `diagrams` | Confluence şeması v2: `attachments`, `storage` |
+
+Confluence'a geçmek, web çıktısını Confluence'a yüklemek veya web sayfasını Confluence sayfasına çevirmek değildir. **Değişen şey veri kaynağını okuyan komut ve bağlantı ayarlarıdır.** Aynı sanal ortamı, Python bağımlılıklarını, Tesseract ve Ollama kurulumunu kullanırsınız.
+
+### İki yolun henüz aynı olmayan davranışı
+
+Web tarafındaki `media_groups`, görseli açıklaması ve analizleriyle aynı grupta tutar; vision çağrısına grup metnini de gönderir.
+
+**Confluence tarafında bu gruplama henüz aynı biçimde uygulanmıyor.** Sayfa gövdesi Markdown'a çevrilir; eklerin OCR/draw.io/vision sonuçları dosyanın sonundaki **Eklerden çıkarılan bilgiler** bölümüne eklenir. Confluence vision çağrısına web tarafındaki gibi sayfa açıklaması/grup bağlamı gönderilmez.
+
+Web denemesi ortak analiz araçlarını ve çıktı yaklaşımını doğrulamamızı sağlar. Confluence'ta birebir aynı görsel-açıklama gruplamasını istemek sonraki bir geliştirme gerektirir. İki JSON çıktısı da henüz tek ortak şemaya birleştirilmemiştir.
+
+## 6. Web denemesinden Confluence kullanımına geçiş
+
+### 6.1. Geçiş sırası
+
+Web üzerinde kullandığınız komut:
+
+```bash
+python manage.py export_web --url "https://ornek.com/dokuman" --ocr --vision
+```
+
+Confluence erişiminiz açıldığında aynı projede:
+
+1. Şirket Confluence adresine erişebilen ağ/VPN bağlantısını açın.
+2. PAT oluşturup `.env` içine ekleyin.
+3. `check_confluence` ile bağlantıyı doğrulayın.
+4. Önce tek sayfayı `export_page` ile alın.
+5. Çıktıyı inceledikten sonra space/ağaç veya tüm space taramasına geçin.
+
+Web çıktısını silmek, yeni Django projesi açmak veya Tesseract/Ollama'yı yeniden kurmak gerekmez. Kaynakları ayırmak için farklı `--output` dizinleri kullanın.
+
+### 6.2. Bağlantı ayarları
+
+Hedef **Confluence Data Center 8.5.3**; istemci `cloud=False` ve `atlassian-python-api==5.0.4` kullanır. Bu yapı Cloud e-posta/API token akışına göre hazırlanmamıştır.
+
+Mevcut `.env` dosyanıza Confluence alanlarını ekleyin:
+
+```dotenv
+CONFLUENCE_BASE_URL=https://confluence.sirketiniz.com/confluence
+CONFLUENCE_PAT=KENDI_PAT_DEGERINIZ
+CONFLUENCE_CA_BUNDLE=
+```
+
+| Alan | Anlamı |
+| --- | --- |
+| `CONFLUENCE_BASE_URL` | HTTPS kök adresi; kurumunuz kullanıyorsa `/confluence` context path dahil |
+| `CONFLUENCE_PAT` | Personal Access Token; API oturumunda Bearer kimliği olarak kullanılır |
+| `CONFLUENCE_CA_BUNDLE` | Gerekirse kurumsal CA PEM dosyası yolu; boşsa sistem sertifikaları |
+| `TESSERACT_CMD` | Varsa önceki OCR ayarı korunur; iki kaynakta ortak |
+| `OLLAMA_BASE_URL` / `OLLAMA_MODEL` | Önceki yerel görsel model ayarları korunur; iki kaynakta ortak |
+
+Kök adrese sayfa yolu veya `/rest/api` eklemeyin. Kurumunuz context path kullanmıyorsa `/confluence` kısmını kaldırın. TLS doğrulaması açıktır. PAT normalleştirilmiş çıktılara bilerek eklenmez; ham dosyalar ise kaynağın sayfa/ek içeriğini taşır.
+
+### 6.3. Bağlantıyı doğrulama
+
+```bash
+python manage.py check_confluence
+```
+
+Komut mevcut kullanıcı ve space API'sini kontrol eder. Başarı bütün sayfalara erişim olduğu anlamına gelmez; yalnızca hesabın izin verdiği içerikler keşfedilebilir.
+
+| Hata/durum | Kontrol |
+| --- | --- |
+| HTTP 401 | PAT geçerliliği ve API erişimi |
+| HTTP 403 | Sayfa/space yetkisi |
+| HTTP 404 | Kök adres, context path, sayfa ID'si veya görünürlük |
+| SSO yönlendirmesi / HTML yanıt | Doğru kök adres ve PAT ile REST API erişimi |
+| Bağlantı/sertifika hatası | VPN, DNS, proxy ve kurumsal CA dosyası |
+| Görünür space yok | Hesap izinleri |
+
+### 6.4. İlk Confluence sayfası
+
+Sayfa ID'si sayısal kimliktir; örneğin URL'de `pageId=123456` olarak görülebilir. Tam web URL'si yerine bu ID verilir:
+
+```bash
+python manage.py export_page --page-id 123456 --output exports_confluence_test
+```
+
+OCR ve vision ile:
+
+```bash
+python manage.py export_page --page-id 123456 --ocr --ocr-lang tur+eng --vision --output exports_confluence_test_vision
+```
+
+Bu komut yalnızca seçili güncel sayfayı ve doğrudan eklerini alır; **alt sayfaları almaz**. Storage gövdesi API'den çekilir, ekler indirilir ve analizler kaydedilir. İşlem sonunda sayfa sürümü yeniden kontrol edilir; değişmişse çıktı tamamlanmış gibi kaydedilmez.
+
+### 6.5. Alt sayfalar ve toplu tarama
+
+Sayfa ve bütün alt sayfaları, torunlar dahil:
+
+```bash
+python manage.py export_confluence --root-page-id 123456 --output exports_confluence_tree
+```
+
+Bir space'in bütün güncel sayfaları:
+
+```bash
+python manage.py export_confluence --space-key ENG --output exports_confluence_eng
+```
+
+`ENG` yerine gerçek space anahtarını kullanın. Space içerik listesi her derinlikteki sayfaları kapsar.
+
+Hesabın görebildiği bütün güncel space'ler:
+
+```bash
+python manage.py export_confluence --all-spaces --output exports_confluence_all
+```
+
+Arşiv space'leri keşfe dahil etme:
+
+```bash
+python manage.py export_confluence --all-spaces --include-archived-spaces --output exports_confluence_with_archived
+```
+
+`--all-spaces`, `--space-key`, `--root-page-id` seçeneklerinden tam birini seçin. Arşiv seçeneği space keşfini genişletir; sayfalardaki `status=current` filtresini değiştirmez. OCR/vision toplu komutlarda da kullanılabilir:
+
+```bash
+python manage.py export_confluence --space-key ENG --ocr --ocr-lang tur+eng --vision --output exports_confluence_eng_vision
+```
+
+API listelerinde `_links.next` takip edilir; ağaç kuyrukla dolaşılır. Aynı sayfa bir koşuda bir kez işlenir. Sayfalar sıralı işlenir, paralel istek yapılmaz. Bir sayfa başarısız olursa diğerlerine devam edilir; listeleme hataları ayrıca raporlanır.
+
+## 7. Confluence çıktıları ve çalışma sınırları
+
+### 7.1. Çıktı dosyaları
+
+Her sayfa `<output>/<page-id>/<version>/` altında tutulur. Örneğin `exports_confluence_test/123456/7/page.md`, 123456 numaralı sayfanın 7. sürümüdür. Tek sayfada varsayılan ana dizin `exports`; toplu komutta `--output` verilmezse `exports_batch/<zaman>/` kullanılır.
 
 | Dosya | İçerik |
 | --- | --- |
-| raw.json | Değiştirilmemiş sayfa API yanıtı |
-| attachments.raw.json | Doğrudan eklerin metadata'sı |
-| normalized.json | Şema v2: metadata, storage, Markdown, ekler, OCR, diyagram grafiği, model yorumu, uyarılar |
-| page.md | Sayfa ve ayrı bölümde eklerden çıkarılan bilgiler |
-| assets/ | Orijinal indirilen dosyalar |
+| `raw.json` | API'den alınan ham sayfa yanıtı |
+| `attachments.raw.json` | Doğrudan eklerin metadata listesi |
+| `normalized.json` | Şema v2: kaynak, ID, space, sürüm, storage, Markdown, ekler ve analizler |
+| `page.md` | Sayfa içeriği ve ardından eklerden çıkarılan bilgiler |
+| `assets/` | İndirilen orijinal ekler |
 
-Toplu taramada ayrıca `run-*.jsonl` olay raporu ve `run-*.summary.json` özet oluşur. Özet kaydedilen, tekrar kullanılan, uyarılı, başarısız sayfaları ve listeleme hatalarını ayrı sayar. `completed` listelemenin bitmesini ifade eder; uyarısız dönüşüm veya model doğruluğu garantisi değildir. Model yorumlarının inceleme gerekliliği normalized.json içindeki `generated_content_requires_review` alanında ayrıca belirtilir.
+JSON'da eklerin `enrichment` alanlarını, `warnings`, `status`, `generated_content_requires_review` ve `acl_status` değerlerini inceleyin. Web'deki `media_groups` alanını burada beklemeyin.
 
-Başarısız sayfa/listeleme varsa komut sıfırdan farklı çıkış koduyla biter. İndirilemeyen ek veya OCR/model hatası sayfayı `needs_review` yapar; diğer içerik korunur.
+Toplu tarama ayrıca `run-*.jsonl` olay raporu ve `run-*.summary.json` özeti üretir. Kaydedilen, tekrar kullanılan, uyarılı, başarısız sayfalar ve listeleme hataları ayrı sayılır. Ctrl+C ile kesilirse biten sayfalar ve özet korunur.
+
+`completed`, listelemenin bitmesini ifade eder; bütün dönüşümlerin uyarısız veya modelin doğru olduğunu garanti etmez. Başarısız sayfa/listeleme varsa toplu komut sıfırdan farklı kodla biter. Ek indirme/OCR/model uyarıları sayfayı `needs_review` yapabilir; kalan içerik korunur.
+
+### 7.2. Devam etme: `--resume`
 
 ```bash
-python manage.py export_confluence --all-spaces --output exports_all --resume
+python manage.py export_confluence --all-spaces --output exports_confluence_all --resume
 ```
 
-Resume tekrar envanter çıkarır ve aynı kaynak/sayfa sürümü/analiz ayarlarıyla üretilmiş uyarısız çıktıları yeniden kullanır. Uyarılı çıktıları sessizce başarılı saymaz; yeni --output ile yeniden işleyin. Önceki v1 çıktıları veya farklı OCR/model ayarları için yeni klasör kullanın. Resume gerçek artımlı senkronizasyon değildir: bağımsız ek değişikliklerini, silinmeleri, yetki değişimlerini veya modelin aynı isim altındaki güncellemesini tespit etmez. Güncel tam çıktı gerektiğinde yeni --output kullanın.
+Toplu resume için önceki `--output` açıkça verilmelidir. Envanter tekrar çıkarılır; aynı kaynak, sayfa sürümü ve analiz ayarlarıyla üretilmiş uyarısız çıktılar yeniden kullanılır. Tek sayfa komutunda da `--resume` vardır.
 
-## Sınırlar
+| Durum | Davranış |
+| --- | --- |
+| Aynı sürüm mevcut, resume yok | Üzerine yazmak yerine hata verir |
+| Kaynak/sürüm/ayarlar aynı, çıktı uyarısız | Çıktıyı yeniden kullanır |
+| Mevcut çıktı uyarılı | Sessizce başarılı saymaz; yeniden denemek için yeni çıktı dizini kullanın |
+| Kaynak veya analiz ayarları farklı | Yeni çıktı dizini kullanın |
+| Güncel tam dışa aktarım isteniyor | Yeni `--output` ile çalıştırın |
 
-- Güncel sayfalar ve doğrudan ekler kapsam dahilindedir. Bloglar, yorumlar, sürüm geçmişi, taslaklar, çöp kutusu dahil değildir. Arşiv space seçeneği sayfa status=current filtresini değiştirmez.
-- ACL henüz çıkarılmaz (`acl_status=not_collected`); farklı izinli kullanıcılar için ortak arama indeksine erişim denetimi ayrıca eklenmelidir.
-- Başka sayfaya referans veren görseller, sayfa içi Confluence bağlantıları ve include makroları henüz çözümlenmez.
-- Karmaşık tablolar ve eklenti makrolarında tam görünüm sadakati garanti edilmez; orijinal JSON saklanır.
-- Sayfa sürümü işlem sonunda kontrol edilir; ekler ve tüm site için transaction/snapshot garantisi yoktur.
-- Henüz LLM eğitimi veya RAG indeksi yoktur.
+Resume gerçek artımlı senkronizasyon değildir. Bağımsız ek değişikliklerini, silinmeleri, yetki değişikliklerini veya aynı isim altındaki model güncellemesini tespit etmez. Eski şemalı çıktıları yeniden kullanmak yerine yeni klasörde üretin.
 
-## Doğrulama
+### 7.3. Confluence diyagramları
+
+Doğrudan eklerde `.drawio` uzantısı veya `<mxfile>` / `<mxGraphModel>` kaynağı tanınırsa otomatik analiz yapılır; OCR/vision seçeneği gerekmez. Sıkıştırılmış/sıkıştırılmamış XML, çoklu diyagram sayfası ve object/UserObject düğümleri desteklenir.
+
+Düğüm kimlikleri/etiketleri, bağlantı uçları/etiketleri ve belirtilmiş ok stilleri JSON'a yazılır; okunabilir yapı Markdown'a eklenir. `source` ve `target` bağlantı uçlarıdır; ok stili belirtilmemişse akış yönü uydurulmaz.
+
+PlantUML/Mermaid makrolarında `plain-text-body` varsa kaynak kod korunur. Diğer makrolar tam çözümlenemeyebilir; uyarı ve orijinal storage saklanır. draw.io makrosu ile kaynak ek birebir eşlenmediğinden başarılı analiz yanında makro uyarısı da görülebilir. Gliffy/eklentiye özel depoda erişilebilir raster önizleme veya kaynak yoksa ayrıca adaptör gerekir.
+
+### 7.4. Diğer sınırlar
+
+- Güncel sayfalar ve doğrudan ekler alınır; bloglar, yorumlar, sürüm geçmişi, taslak ve çöp kutusu kapsam dışıdır.
+- ACL çıkarılmaz: `acl_status=not_collected`. Çok kullanıcılı arama/RAG için erişim denetimi ayrıca gerekir.
+- Başka sayfadan görsel referansları, Confluence iç bağlantıları ve include makroları henüz tam çözülmez.
+- PDF/Office ekleri indirilebilir; iç metin/görselleri bu sürümde analiz edilmez.
+- Karmaşık tablo/eklenti makrolarında birebir görünüm garanti edilmez; ham kaynak korunur.
+- Sayfa sürümü kontrol edilir; bütün site ve ekler için tek transaction/snapshot garantisi yoktur.
+- Web'deki görsel-açıklama gruplaması ve vision'a sayfa bağlamı gönderimi Confluence'a henüz taşınmamıştır.
+
+## 8. Dosyaların görevleri
+
+| Dosya | Görevi |
+| --- | --- |
+| `manage.py` | Django komutlarını başlatır |
+| `config/settings.py` | Minimal Django ayarları ve proje kökündeki `.env` yüklemesi |
+| `.env.example` / `requirements.txt` | Örnek ayarlar / Python bağımlılıkları |
+| `exporter/management/commands/export_web.py` | URL, seçici ve analiz seçeneklerini alır |
+| `exporter/web_client.py` | Ayrı web HTTP oturumu, yönlendirme ve boyut sınırları |
+| `exporter/web.py` | HTML dönüşümü, görsel/açıklama grupları ve web çıktıları |
+| `exporter/management/commands/check_confluence.py` | PAT ve API erişimini kontrol eder |
+| `exporter/management/commands/export_page.py` | Tek Confluence sayfası aktarımı |
+| `exporter/management/commands/export_confluence.py` | Space/ağaç/toplu tarama seçenekleri |
+| `exporter/client.py` | Confluence SDK/PAT oturumu, sayfalama ve ek indirme |
+| `exporter/crawler.py` | Space keşfi, ağaç dolaşımı ve koşu raporları |
+| `exporter/service.py` | Confluence sayfa/eklerini sürüm klasörlerine kaydetme |
+| `exporter/parser.py` | Confluence storage biçimini Markdown'a çevirme |
+| `exporter/enrichment.py` | Ortak OCR, draw.io kaynak analizi ve yerel Ollama vision |
+| `examples/web_demo.html` | Confluence gerektirmeyen örnek sayfa |
+| `exporter/tests.py`, `exporter/test_bulk.py`, `exporter/test_web.py` | İstemci, dönüşüm, tarama ve web komutu testleri |
+
+Ortak analiz modülü bulunması, iki dönüştürücünün ve JSON çıktılarının bütün davranışlarının aynı olduğu anlamına gelmez.
+
+## 9. Testler ve sonraki RAG aşaması
+
+### 9.1. Testleri çalıştırma
 
 ```bash
 python manage.py check
 python -m unittest exporter.tests exporter.test_bulk exporter.test_web -v
 ```
 
-19 test: SDK/PAT yapılandırması ve HTTP yanıtları (taklit yanıtlarla), sayfalama, tüm space/ağaç dolaşımı, hata sonrası devam, resume, draw.io sıkıştırma/çoklu sayfa/XML güvenliği, gerçek Tesseract İngilizce OCR, taklit Ollama yanıtı ve dosyaya uçtan uca diyagram dışa aktarımı. OCR testi için Tesseract ve eng paketi gerekir.
+Mevcut sürümde **39 test** bulunur: 19 Confluence/ortak analiz testi ve 20 web testi. SDK/PAT, sayfalama, hata sonrası devam, resume, draw.io, kaynak/kod korunması, görsel-açıklama grupları, URL/charset, indirme sınırları ve gerçek yerel HTTP üzerinden web komutu kapsanır.
 
-Ek web testleri: görsel/açıklama grupları, komşuluk ile açık ilişki ayrımı, lazy-load/srcset, göreli URL ve charset, kaynak diyagramlar, SVG, başarısız görsel, aynı görselin farklı bağlamları, modele açıklama aktarımı, boyut/yönlendirme sınırları ve PAT olmadan gerçek yerel HTTP üzerinden terminal komutunun çalışması. Gerçek bir Ollama modeli bu testlerde çağrılmaz.
+Gerçek İngilizce Tesseract testi için motor ve `eng` paketi gerekir. Ollama yanıtları taklit edilir; gerçek model çağrılmaz. Şirket Confluence 8.5.3 bağlantısı ve gerçek görsel model bu testlerle doğrulanmış sayılmaz. Türkçe OCR kendi ortamınızda ayrıca kontrol edilmelidir.
 
-Şirket Confluence 8.5.3 bağlantısı ve gerçek Ollama modeli burada test edilmedi. Türkçe OCR dili kullanıcı ortamında kurulum sonrası doğrulanmalıdır.
+### 9.2. Şu anda bir model eğitiliyor mu?
 
-## Belgeler
+**Hayır. Mevcut aşama veri toplama, dönüştürme ve isteğe bağlı görsel analizidir.** `--vision`, kurulu modelden açıklama alır; modeli bu verilerle eğitmez. Markdown/JSON üretmek tek başına chatbot veya RAG kurulumu değildir.
 
-- https://developer.atlassian.com/server/confluence/confluence-rest-api-examples/
-- https://atlassian-python-api.readthedocs.io/
-- https://tesseract-ocr.github.io/tessdoc/Installation.html
-- https://docs.ollama.com/api/chat
-- https://www.drawio.com/docs/manual/advanced/diagram-source-edit/
+Sonraki aşama için henüz eklenmemiş parçalar:
+
+1. İki kaynağın çıktılarını okuyacak ortak veri modeli/yükleyici.
+2. Sayfa/bölüm ve görsel-açıklama sınırlarını koruyacak parçalama (chunking).
+3. Embedding üretimi ve vektör indeksine kayıt.
+4. Soruyla ilgili içeriği getirip kaynak gösteren yanıt üretimi.
+5. Confluence izinleri, güncellemeler ve silinmeler için erişim/senkronizasyon mekanizması.
+
+Web'de `media_groups` sınırları korunmalıdır; sabit karakter sayısıyla bölmek açıklamayı görselden yeniden koparabilir. Confluence için bu gruplama ayrıca geliştirilmelidir. Orijinal içerik, OCR metni ve model yorumu birbirinden ayırt edilmelidir.
+
+### 9.3. Teknik başvuru kaynakları
+
+- [Confluence Server/Data Center REST API örnekleri](https://developer.atlassian.com/server/confluence/confluence-rest-api-examples/)
+- [atlassian-python-api](https://atlassian-python-api.readthedocs.io/)
+- [Tesseract kurulumu](https://tesseract-ocr.github.io/tessdoc/Installation.html)
+- [Ollama chat API](https://docs.ollama.com/api/chat)
+- [draw.io diyagram kaynakları](https://www.drawio.com/docs/manual/advanced/diagram-source-edit/)

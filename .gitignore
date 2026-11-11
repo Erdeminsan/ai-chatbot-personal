@@ -6,3 +6,5 @@ exports/
 *.sqlite3
 exports*/
 .DS_Store
+.django-secret
+data/

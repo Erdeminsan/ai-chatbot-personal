@@ -1,5 +1,91 @@
 # Web ve Confluence Exporter
 
+## Yeni: /confluence ve /search panelleri, token parçalama ve reranking
+
+Bu sürüm üç gereksinimi uygular:
+
+1. Kosinüs vektör aramasının getirdiği ilk K parça, sorgu-parça çiftlerini değerlendiren ayrı bir CrossEncoder üzerinden yeniden sıralanır. Önce tüm K aday yeniden sıralanır, sonra istenen sonuç sayısına indirilir. Varsayılan K=20, sonuç=5; 1 ≤ sonuç ≤ K ≤ 100.
+2. `/confluence` ve `/search` hem doğrudan URL hem panelin üstündeki komut kutusunda slash komutları olarak çalışır. Slack/Teams bot entegrasyonu değildir.
+3. `cl100k_base` tokenizer ile 500–1000 token aralığı, hedef 800, ardışık parçalar arasında %10 örtüşme uygulanır. Son parça 500 altında kalacaksa önceki parça yeniden dengelenir. 500 tokendan kısa belgelere dolgu eklenmez; `short_document=true` olarak saklanır. Token sayısı/örtüşme kaynak belgenin tek seferlik tokenizasyonu üzerinde ölçülür. Byte aralıkları UTF-8 karakterlerini bölmez. Parçalar farklı belgelere taşmaz.
+
+### Kurulum ve paneller
+
+Sanal ortam aktifken:
+
+```bash
+pip install -r requirements-rag.txt
+python manage.py migrate
+python manage.py createsuperuser
+python manage.py runserver 127.0.0.1:8000
+```
+
+Arayüz: http://127.0.0.1:8000/search veya http://127.0.0.1:8000/confluence
+
+`createsuperuser` ile oluşturduğunuz yerel Django hesabıyla giriş yapın. Panel yalnızca staff yöneticilere açıktır; tek operatörlü yerel kullanım içindir. .env içindeki ortak Confluence PAT'ı ve ortak indeks kullanılır. Bu, Confluence belge izinlerini kullanıcı bazında filtreleyen bir sistem değildir. Host izinleri localhost ile sınırlıdır. .django-secret ilk kullanımda yerelde üretilir ve Git'e alınmaz.
+
+Tarama görevleri için ikinci terminalde:
+
+```bash
+source venv/bin/activate
+python manage.py run_panel_worker
+```
+
+Panelde görev oluşturmak sadece kuyruğa ekler; worker kapalıysa görev bekler. Çıktı: `exports_panel/<görev-id>/`. Başarısız/yarım taramalar ve ilerleme panelde gösterilir. Worker zorla öldürülürse, başka worker çalışmadığından emin olduktan sonra `run_panel_worker --recover` eski running görevlerini failed olarak işaretler; yeni tarama başlatın. `--once` en fazla bir görevi işler.
+
+### İndeks oluşturma ve arama
+
+Önce mevcut `export_web` veya Confluence komutlarından/panelinden çıktı üretin. Sonra:
+
+```bash
+# Normalized JSON dosyalarını recursive oku, her kaynak için en yeni sürümü seç.
+python manage.py index_exports --input exports_web --chunk-size 800
+
+# Confluence panel çıktılarıyla indeks oluşturma alternatifi:
+python manage.py index_exports --input exports_panel --chunk-size 800
+
+# Vektör top-20 → CrossEncoder reranking → ilk 5 sonuç
+python manage.py search_docs --query "Confluence bağlantısı nasıl kurulur?" --k 20 --limit 5
+```
+
+`index_exports` indeksi atomik olarak YENİDEN OLUŞTURUR; mevcut indekse ekleme yapmaz. İki kaynağı birlikte aramak için web/Confluence çıktılarınızı aynı üst dizin altında tutup bu üst dizini --input olarak verin. Boş/başarısız oluşturma eski indeksi korur. Tek bir normalized.json dosyası da --input olabilir. Eski dışa aktarımları yeniden üretmek zorunlu değildir: mevcut markdown alanı indekslenir. Uyarılı ve model yorumu içeren belgeler dışlanmaz; uyarı/provenans sonuçta korunur.
+
+Varsayılan indeks: `data/search.sqlite3`. `--index` ile başka bir yol veya `.env` içinde `RAG_INDEX_PATH` kullanılabilir. Panelde aranan dosya RAG_INDEX_PATH'tir; CLI'da --index ile farklı yere yazdıysanız panel ayarını da değiştirin. Tarama tamamlanınca indeks kendiliğinden güncellenmez; `index_exports` tekrar çalıştırılmalıdır.
+
+İndeks metin/provenansı ve float32 vektörleri SQLite'da saklar. Arama, normalize vektörlerde NumPy ile tam kosinüs taraması yapar; harici vektör sunucusu gerektirmez. Küçük/orta ölçekli yerel kullanım içindir; çok büyük veri için Qdrant/pgvector/FAISS geçişi ayrıca yapılmalıdır.
+
+### Modeller ve bağlam sınırları
+
+- Embedding: `intfloat/multilingual-e5-small`; query:/passage: önekleri kullanılır.
+- Reranker: `BAAI/bge-reranker-v2-m3`; CrossEncoder ham skorları sıralamada kullanılır. Skorlar olasılık veya doğruluk yüzdesi değildir.
+- Modeller yerelde CPU üzerinde çalışır. İlk kullanımda Hugging Face'den ağırlıklar indirilir; bu indirmeler büyük olabilir ve ilk arama uzun sürebilir. Sonraki sorgularda süreç içi model önbelleği kullanılır.
+- `requirements.txt` veri çekme, panel, parçalama ve testler için yeterlidir. Gerçek embedding/reranker için `requirements-rag.txt` gerekir. Eksik modelde rastgele veya kelime eşleme sonucuna sessiz geçiş yapılmaz.
+- `.env`: EMBEDDING_MODEL, RERANK_MODEL, EMBEDDING_REVISION, RERANK_REVISION, RAG_DEVICE (cpu/cuda/mps), RAG_OFFLINE=1 desteklenir. E5 yerine model değiştirirken önek yaklaşımının uyumunu kontrol edin; model/revizyon değişiminde indeksi yeniden üretin. EMBEDDING_REVISION/RERANK_REVISION alanlarını commit SHA ile sabitlemek tekrar üretilebilirliği artırır.
+- Ağsız kullanımda model ağırlıklarını ve tiktoken cl100k_base önbelleğini önceden hazırlayın. RAG_OFFLINE yalnızca Hugging Face model yükleyicilerini etkiler; tiktoken için TIKTOKEN_CACHE_DIR ayrıca hazırlanmalıdır.
+- 500–1000 cl100k token, embedding/reranker tokenizer'ında aynı sayıda token demek değildir. İçeriğin sonunu sessizce kesmemek için her parça model tokenizer'ının bağlamına sığan daha küçük, örtüşmeli pencerelere ayrılır. Embedding pencereleri normalize ortalama ile tek parça vektörüne dönüşür; reranker pencerelerinin en yüksek skoru parçanın skoru olur. Bu iç pencereler, kayıtlı belge parçaları ve %10 belge örtüşmesinden ayrı bir işlemdir.
+- Reranker sorgusu en fazla 128 kendi model tokenı; sorgu aşarsa açık hata verir. Arayüzde ayrıca 2000 karakter sınırı vardır.
+- Çok büyük gruplar token sınırında bölünebilir. `media_group_ids`, `source_file`, `token_start/end`, `byte_start/end` tam kaynağa dönüşü sağlar.
+
+Sonuçlar kaynak URL, parça metni, token sayısı, ilk vektör sırası/skoru ve yeni reranker sırası/skoru içerir. Eşik uygulanmadığından düşük alakalı sorgular da en yakın sonuçları döndürebilir. Hangi modelin daha iyi olduğu, şirket sorularından hazırlanmış değerlendirme kümesiyle ölçülmelidir; yalnızca reranker eklemek kalite artışını kanıtlamaz.
+
+### Yeni komutların özeti
+
+| Komut | İşlev |
+| --- | --- |
+| `python manage.py index_exports --input DIZIN --chunk-size 800` | Token parçalama + embedding + atomik indeks oluşturma |
+| `python manage.py search_docs --query "SORU" --k 20 --limit 5` | Vektör araması + zorunlu CrossEncoder reranking |
+| `python manage.py migrate` | Panel kullanıcıları ve görev veritabanını oluşturma |
+| `python manage.py createsuperuser` | Yerel yönetici hesabı |
+| `python manage.py runserver 127.0.0.1:8000` | Panelleri açma |
+| `python manage.py run_panel_worker` | Confluence panelindeki tarama kuyruğu |
+| `python manage.py test exporter retrieval` | 53 eski + 18 yeni test |
+
+Token sınırları, %10 örtüşme, Unicode, kısa belgeler, en güncel sürüm seçimi, atomik yeniden indeksleme, sadece top-K'nin reranker'a verilmesi ve sıralama değişimi, model bağlam pencereleri, paneller, slash komutları, CSRF ve worker test edilir. Embedding/reranker testleri deterministik test modelleri kullanır; gerçek büyük model ağırlıklarıyla kalite/performans veya şirket Confluence erişimi doğrulanmış sayılmaz. Henüz LLM cevap üretimi/fine-tuning eklenmedi.
+
+Model belgeleri: https://huggingface.co/intfloat/multilingual-e5-small · https://huggingface.co/BAAI/bge-reranker-v2-m3 · https://www.sbert.net/docs/cross_encoder/usage/usage.html
+
+---
+
+
 Web sayfalarındaki veya Confluence Data Center içindeki bilgileri; metin, görsel, kod ve diyagram kaynaklarını koruyarak **Markdown ve JSON dosyalarına** aktaran Python/Django komut satırı projesi.
 
 **Kullanım sırası:** Önce Confluence erişimi olmadan web scraping ile sistemi çalıştırın. Çıktıları ve isteğe bağlı görsel analizini inceleyin. Confluence erişiminiz açıldığında aynı proje içinde bağlantı ayarlarını ekleyip Confluence komutlarına geçin.
@@ -27,7 +113,7 @@ Bu adımda Confluence'a bağlanılmaz. **Confluence hesabı, PAT veya şirket VP
 
 Varsayılan kapsam **tek URL'deki tek sayfadır**. Ana sayfayı vermek sitenin bütün bağlantılarının ve alt sayfalarının taranacağı anlamına gelmez.
 
-Proje Django'nun komut altyapısını kullanır. Şu an veritabanı, web ekranı veya sohbet arayüzü yoktur. Çalıştırmak için `migrate` veya `runserver` gerekmez.
+Veri çekme komutları terminalden çalışmaya devam eder. Yeni `/confluence` ve `/search` panelleri için SQLite, `migrate` ve `runserver` kullanılır; kurulum aşağıdaki yeni bölümde açıklanır. Sohbet/LLM yanıt üretimi henüz yoktur.
 
 ### 1.2. Kurulum
 
@@ -550,23 +636,17 @@ python manage.py check
 python -m unittest exporter.tests exporter.test_bulk exporter.test_web exporter.test_confluence_media -v
 ```
 
-Mevcut sürümde **53 test** bulunur: 19 Confluence/ortak analiz testi, 20 web testi ve 14 Confluence gruplama testi. SDK/PAT, sayfalama, hata sonrası devam, resume, draw.io, kaynak/kod korunması, görsel-açıklama grupları, URL/charset, indirme sınırları ve gerçek yerel HTTP üzerinden web komutu kapsanır. Yeni testler ayrıca ac:caption/ac:title, aynı ekin farklı bağlamları, eksik/başka sayfaya ait görseller, ağaç taramasında gruplama ve eski şemada resume reddini doğrular.
+Veri çekme bölümünde **53 test** bulunur: 19 Confluence/ortak analiz testi, 20 web testi ve 14 Confluence gruplama testi. SDK/PAT, sayfalama, hata sonrası devam, resume, draw.io, kaynak/kod korunması, görsel-açıklama grupları, URL/charset, indirme sınırları ve gerçek yerel HTTP üzerinden web komutu kapsanır. Yeni testler ayrıca ac:caption/ac:title, aynı ekin farklı bağlamları, eksik/başka sayfaya ait görseller, ağaç taramasında gruplama ve eski şemada resume reddini doğrular.
 
 Gerçek İngilizce Tesseract testi için motor ve `eng` paketi gerekir. Ollama yanıtları taklit edilir; gerçek model çağrılmaz. Şirket Confluence 8.5.3 bağlantısı ve gerçek görsel model bu testlerle doğrulanmış sayılmaz. Türkçe OCR kendi ortamınızda ayrıca kontrol edilmelidir.
 
 ### 9.2. Şu anda bir model eğitiliyor mu?
 
-**Hayır. Mevcut aşama veri toplama, dönüştürme ve isteğe bağlı görsel analizidir.** `--vision`, kurulu modelden açıklama alır; modeli bu verilerle eğitmez. Markdown/JSON üretmek tek başına chatbot veya RAG kurulumu değildir.
+**Hayır. Veri toplama/dönüştürme, token parçalama, embedding indeksleme ve CrossEncoder ile yeniden sıralama vardır; model ağırlıkları eğitilmez.** `--vision`, kurulu modelden açıklama alır; modeli bu verilerle eğitmez. Markdown/JSON üretmek tek başına chatbot veya RAG kurulumu değildir.
 
-Sonraki aşama için henüz eklenmemiş parçalar:
+Yeni `retrieval` uygulaması her iki kaynağın normalized.json çıktısını okur, 500–1000 token parçalar oluşturur, embedding indeksi kurar ve vektör top-K sonuçlarını CrossEncoder ile yeniden sıralar. Henüz LLM ile yanıt üretimi, Confluence ACL filtrelemesi, güncelleme/silinme senkronizasyonu yoktur.
 
-1. İki kaynağın çıktılarını okuyacak ortak veri modeli/yükleyici.
-2. Sayfa/bölüm ve görsel-açıklama sınırlarını koruyacak parçalama (chunking).
-3. Embedding üretimi ve vektör indeksine kayıt.
-4. Soruyla ilgili içeriği getirip kaynak gösteren yanıt üretimi.
-5. Confluence izinleri, güncellemeler ve silinmeler için erişim/senkronizasyon mekanizması.
-
-Her iki kaynakta `media_groups` sınırları korunmalıdır; sabit karakter sayısıyla bölmek açıklamayı görselden yeniden koparabilir. Orijinal içerik, OCR metni ve model yorumu birbirinden ayırt edilmelidir.
+Token bütçesi sert sınırdır: büyük kod blokları veya görsel-açıklama grupları parça sınırında bölünebilir. Kesişen `media_group_ids`, kaynak dosyası ve byte/token aralıkları korunur; tam grup özgün normalized.json içinden geri alınabilir. Model yorumları ve dönüşüm uyarıları sonuçlarda belirtilir.
 
 ### 9.3. Teknik başvuru kaynakları
 

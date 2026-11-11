@@ -1,0 +1,1 @@
+{% extends 'retrieval/base.html' %}{% block content %}<h1>Çalışma alanına giriş</h1><p class="muted">Yerel yönetici hesabınla devam et.</p><div class="card"><form method="post">{% csrf_token %}{{ form.as_p }}<button>Giriş yap</button></form></div>{% endblock %}
